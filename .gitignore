@@ -13,9 +13,6 @@ cashier-api.exe
 .env.test.local
 .env.production.local
 
-# Go
-go.sum
-
 # IDE
 # .vscode/
 .idea/
