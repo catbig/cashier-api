@@ -3,31 +3,30 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
+
+	"cashier-api/database"
+	"cashier-api/handlers"
+	"cashier-api/repositories"
+	"cashier-api/services"
+
+	"github.com/spf13/viper"
 )
 
-// Product represents a product in the cashier system
-type Product struct {
-	ID    int    `json:"id"`
-	Name  string `json:"name"`
-	Price int    `json:"price"`
-	Stock int    `json:"stock"`
-}
-
-// Category represents a product category in the cashier system
+// Category model
 type Category struct {
 	ID          int    `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
 }
 
-// In-memory storage for products
-var products = []Product{
-	{ID: 1, Name: "Indomie Godog", Price: 3500, Stock: 10},
-	{ID: 2, Name: "Vit 1000ml", Price: 3000, Stock: 40},
-	{ID: 3, Name: "Kecap", Price: 12000, Stock: 20},
+type Config struct {
+	Port   string `mapstructure:"PORT"`
+	DBConn string `mapstructure:"DB_CONN"`
 }
 
 // In-memory storage for categories
@@ -38,218 +37,154 @@ var categories = []Category{
 }
 
 func main() {
-	// Routes configuration
+	// Load configuration with Viper
+	viper.AutomaticEnv()
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 
-	// Health check endpoint
+	if _, err := os.Stat(".env"); err == nil {
+		viper.SetConfigFile(".env")
+		if err := viper.ReadInConfig(); err != nil {
+			log.Printf("Warning: Error reading .env file: %v", err)
+		}
+	}
+
+	config := Config{
+		Port:   viper.GetString("PORT"),
+		DBConn: viper.GetString("DB_CONN"),
+	}
+
+	if config.Port == "" {
+		config.Port = "8080"
+	}
+
+	if config.DBConn == "" {
+		log.Fatal("DB_CONN environment variable is required")
+	}
+
+	// Initialize database connection
+	db, err := database.InitDB(config.DBConn)
+	if err != nil {
+		log.Fatal("Failed to initialize database:", err)
+	}
+	defer db.Close()
+
+	// Dependency Injection Setup for Products
+	productRepo := repositories.NewProductRepository(db)
+	productService := services.NewProductService(productRepo)
+	productHandler := handlers.NewProductHandler(productService)
+
+	// Setup routes
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
 			"status":  "OK",
-			"message": "Cashier API Running with Categories",
+			"message": "Cashier API Running with Layered Architecture",
+			"version": "2.0.0",
 		})
 	})
 
-	// ========== PRODUCT ENDPOINTS ==========
-
-	// Product collection endpoints (without trailing slash)
+	// Product routes
 	http.HandleFunc("/api/products", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
-		case "GET":
-			getAllProducts(w, r)
-		case "POST":
-			createProduct(w, r)
+		case http.MethodGet, http.MethodPost:
+			productHandler.HandleProducts(w, r)
 		default:
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
 
-	// Individual product endpoints (with trailing slash)
 	http.HandleFunc("/api/products/", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
-		case "GET":
-			getProductByID(w, r)
-		case "PUT":
-			updateProduct(w, r)
-		case "DELETE":
-			deleteProduct(w, r)
+		case http.MethodGet, http.MethodPut, http.MethodDelete:
+			productHandler.HandleProductByID(w, r)
 		default:
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
 
-	// ========== CATEGORY ENDPOINTS ==========
-
-	// Category collection endpoints (without trailing slash)
+	// Category routes (handled in main.go)
 	http.HandleFunc("/api/categories", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
-		case "GET":
-			getAllCategories(w, r)
-		case "POST":
-			createCategory(w, r)
+		case http.MethodGet:
+			handleGetAllCategories(w, r)
+		case http.MethodPost:
+			handleCreateCategory(w, r)
 		default:
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
 
-	// Individual category endpoints (with trailing slash)
 	http.HandleFunc("/api/categories/", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
-		case "GET":
-			getCategoryByID(w, r)
-		case "PUT":
-			updateCategory(w, r)
-		case "DELETE":
-			deleteCategory(w, r)
+		case http.MethodGet:
+			handleGetCategoryByID(w, r)
+		case http.MethodPut:
+			handleUpdateCategory(w, r)
+		case http.MethodDelete:
+			handleDeleteCategory(w, r)
 		default:
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
 
 	// Start server
-	fmt.Println("🚀 Cashier API Server running on http://localhost:8080")
+	addr := "0.0.0.0:" + config.Port
+	fmt.Println("🚀 Cashier API Server running on http://" + addr)
 	fmt.Println("📊 Available endpoints:")
-	fmt.Println("  Health Check:")
-	fmt.Println("    GET    /health")
-	fmt.Println("  Products:")
-	fmt.Println("    GET    /api/products")
-	fmt.Println("    POST   /api/products")
-	fmt.Println("    GET    /api/products/{id}")
-	fmt.Println("    PUT    /api/products/{id}")
-	fmt.Println("    DELETE /api/products/{id}")
-	fmt.Println("  Categories:")
-	fmt.Println("    GET    /api/categories")
-	fmt.Println("    POST   /api/categories")
-	fmt.Println("    GET    /api/categories/{id}")
-	fmt.Println("    PUT    /api/categories/{id}")
-	fmt.Println("    DELETE /api/categories/{id}")
+	fmt.Println("  GET    /health")
+	fmt.Println("  GET    /api/products")
+	fmt.Println("  POST   /api/products")
+	fmt.Println("  GET    /api/products/{id}")
+	fmt.Println("  PUT    /api/products/{id}")
+	fmt.Println("  DELETE /api/products/{id}")
+	fmt.Println("  GET    /api/categories")
+	fmt.Println("  POST   /api/categories")
+	fmt.Println("  GET    /api/categories/{id}")
+	fmt.Println("  PUT    /api/categories/{id}")
+	fmt.Println("  DELETE /api/categories/{id}")
 
-	err := http.ListenAndServe(":8080", nil)
-	if err != nil {
-		fmt.Printf("Failed to start server: %v\n", err)
+	if err := http.ListenAndServe(addr, nil); err != nil {
+		log.Fatal("Failed to start server:", err)
 	}
 }
 
-// ========== PRODUCT HANDLER FUNCTIONS ==========
+// Category Handlers (kept in main.go as requested)
 
-func getAllProducts(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(products)
-}
-
-func createProduct(w http.ResponseWriter, r *http.Request) {
-	var newProduct Product
-	err := json.NewDecoder(r.Body).Decode(&newProduct)
-	if err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	// Auto-increment ID
-	newProduct.ID = len(products) + 1
-	products = append(products, newProduct)
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(newProduct)
-}
-
-func getProductByID(w http.ResponseWriter, r *http.Request) {
-	idStr := strings.TrimPrefix(r.URL.Path, "/api/products/")
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		http.Error(w, "Invalid product ID", http.StatusBadRequest)
-		return
-	}
-
-	for _, product := range products {
-		if product.ID == id {
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(product)
-			return
-		}
-	}
-
-	http.Error(w, "Product not found", http.StatusNotFound)
-}
-
-func updateProduct(w http.ResponseWriter, r *http.Request) {
-	idStr := strings.TrimPrefix(r.URL.Path, "/api/products/")
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		http.Error(w, "Invalid product ID", http.StatusBadRequest)
-		return
-	}
-
-	var updatedProduct Product
-	err = json.NewDecoder(r.Body).Decode(&updatedProduct)
-	if err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	for i := range products {
-		if products[i].ID == id {
-			updatedProduct.ID = id
-			products[i] = updatedProduct
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(updatedProduct)
-			return
-		}
-	}
-
-	http.Error(w, "Product not found", http.StatusNotFound)
-}
-
-func deleteProduct(w http.ResponseWriter, r *http.Request) {
-	idStr := strings.TrimPrefix(r.URL.Path, "/api/products/")
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		http.Error(w, "Invalid product ID", http.StatusBadRequest)
-		return
-	}
-
-	for i, product := range products {
-		if product.ID == id {
-			products = append(products[:i], products[i+1:]...)
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]string{
-				"message": "Product deleted successfully",
-			})
-			return
-		}
-	}
-
-	http.Error(w, "Product not found", http.StatusNotFound)
-}
-
-// ========== CATEGORY HANDLER FUNCTIONS ==========
-
-func getAllCategories(w http.ResponseWriter, r *http.Request) {
+func handleGetAllCategories(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(categories)
 }
 
-func createCategory(w http.ResponseWriter, r *http.Request) {
-	var newCategory Category
-	err := json.NewDecoder(r.Body).Decode(&newCategory)
-	if err != nil {
+func handleCreateCategory(w http.ResponseWriter, r *http.Request) {
+	var category Category
+	if err := json.NewDecoder(r.Body).Decode(&category); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
+	if category.Name == "" {
+		http.Error(w, "Category name is required", http.StatusBadRequest)
+		return
+	}
+
 	// Auto-increment ID
-	newCategory.ID = len(categories) + 1
-	categories = append(categories, newCategory)
+	category.ID = len(categories) + 1
+	categories = append(categories, category)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(newCategory)
+	json.NewEncoder(w).Encode(category)
 }
 
-func getCategoryByID(w http.ResponseWriter, r *http.Request) {
+func handleGetCategoryByID(w http.ResponseWriter, r *http.Request) {
 	idStr := strings.TrimPrefix(r.URL.Path, "/api/categories/")
 	id, err := strconv.Atoi(idStr)
-	if err != nil {
+	if err != nil || id <= 0 {
 		http.Error(w, "Invalid category ID", http.StatusBadRequest)
 		return
 	}
@@ -265,18 +200,22 @@ func getCategoryByID(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "Category not found", http.StatusNotFound)
 }
 
-func updateCategory(w http.ResponseWriter, r *http.Request) {
+func handleUpdateCategory(w http.ResponseWriter, r *http.Request) {
 	idStr := strings.TrimPrefix(r.URL.Path, "/api/categories/")
 	id, err := strconv.Atoi(idStr)
-	if err != nil {
+	if err != nil || id <= 0 {
 		http.Error(w, "Invalid category ID", http.StatusBadRequest)
 		return
 	}
 
 	var updatedCategory Category
-	err = json.NewDecoder(r.Body).Decode(&updatedCategory)
-	if err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&updatedCategory); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if updatedCategory.Name == "" {
+		http.Error(w, "Category name is required", http.StatusBadRequest)
 		return
 	}
 
@@ -293,10 +232,10 @@ func updateCategory(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "Category not found", http.StatusNotFound)
 }
 
-func deleteCategory(w http.ResponseWriter, r *http.Request) {
+func handleDeleteCategory(w http.ResponseWriter, r *http.Request) {
 	idStr := strings.TrimPrefix(r.URL.Path, "/api/categories/")
 	id, err := strconv.Atoi(idStr)
-	if err != nil {
+	if err != nil || id <= 0 {
 		http.Error(w, "Invalid category ID", http.StatusBadRequest)
 		return
 	}
