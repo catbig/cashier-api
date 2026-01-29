@@ -14,7 +14,8 @@ func NewProductRepository(db *sql.DB) *ProductRepository {
 	return &ProductRepository{db: db}
 }
 
-func (r *ProductRepository) GetAll() ([]models.Product, error) {
+// GetAll - Get all products WITHOUT category info
+func (r *ProductRepository) GetAll() ([]models.ProductList, error) {
 	query := "SELECT id, name, price, stock FROM products ORDER BY id"
 	rows, err := r.db.Query(query)
 	if err != nil {
@@ -22,9 +23,9 @@ func (r *ProductRepository) GetAll() ([]models.Product, error) {
 	}
 	defer rows.Close()
 
-	var products []models.Product
+	var products []models.ProductList
 	for rows.Next() {
-		var p models.Product
+		var p models.ProductList
 		if err := rows.Scan(&p.ID, &p.Name, &p.Price, &p.Stock); err != nil {
 			return nil, err
 		}
@@ -38,12 +39,21 @@ func (r *ProductRepository) GetAll() ([]models.Product, error) {
 	return products, nil
 }
 
-func (r *ProductRepository) GetByID(id int) (*models.Product, error) {
-	query := "SELECT id, name, price, stock FROM products WHERE id = $1"
+// GetByID - Get product by ID WITH category name (JOIN)
+func (r *ProductRepository) GetByID(id int) (*models.ProductDetail, error) {
+	query := `
+        SELECT p.id, p.name, p.price, p.stock, p.category_id, 
+               c.name as category_name
+        FROM products p
+        LEFT JOIN categories c ON p.category_id = c.id
+        WHERE p.id = $1
+    `
 	row := r.db.QueryRow(query, id)
 
-	var p models.Product
-	err := row.Scan(&p.ID, &p.Name, &p.Price, &p.Stock)
+	var product models.ProductDetail
+
+	err := row.Scan(&product.ID, &product.Name, &product.Price, &product.Stock,
+		&product.CategoryID, &product.CategoryName)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, errors.New("product not found")
@@ -51,17 +61,19 @@ func (r *ProductRepository) GetByID(id int) (*models.Product, error) {
 		return nil, err
 	}
 
-	return &p, nil
+	return &product, nil
 }
 
+// Create - Create new product
 func (r *ProductRepository) Create(product *models.Product) error {
-	query := "INSERT INTO products (name, price, stock) VALUES ($1, $2, $3) RETURNING id"
-	return r.db.QueryRow(query, product.Name, product.Price, product.Stock).Scan(&product.ID)
+	query := "INSERT INTO products (name, price, stock, category_id) VALUES ($1, $2, $3, $4) RETURNING id"
+	return r.db.QueryRow(query, product.Name, product.Price, product.Stock, product.CategoryID).Scan(&product.ID)
 }
 
+// Update - Update product
 func (r *ProductRepository) Update(product *models.Product) error {
-	query := "UPDATE products SET name = $1, price = $2, stock = $3 WHERE id = $4"
-	result, err := r.db.Exec(query, product.Name, product.Price, product.Stock, product.ID)
+	query := "UPDATE products SET name = $1, price = $2, stock = $3, category_id = $4 WHERE id = $5"
+	result, err := r.db.Exec(query, product.Name, product.Price, product.Stock, product.CategoryID, product.ID)
 	if err != nil {
 		return err
 	}
@@ -78,6 +90,7 @@ func (r *ProductRepository) Update(product *models.Product) error {
 	return nil
 }
 
+// Delete - Delete product
 func (r *ProductRepository) Delete(id int) error {
 	query := "DELETE FROM products WHERE id = $1"
 	result, err := r.db.Exec(query, id)
@@ -95,4 +108,15 @@ func (r *ProductRepository) Delete(id int) error {
 	}
 
 	return nil
+}
+
+// CheckCategoryExists - Helper to validate category_id
+func (r *ProductRepository) CheckCategoryExists(categoryID int) (bool, error) {
+	query := "SELECT COUNT(*) FROM categories WHERE id = $1"
+	var count int
+	err := r.db.QueryRow(query, categoryID).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }

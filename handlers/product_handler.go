@@ -60,7 +60,11 @@ func (h *ProductHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.service.Create(&product); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		status := http.StatusBadRequest
+		if err == models.ErrCategoryNotFound {
+			status = http.StatusNotFound
+		}
+		http.Error(w, err.Error(), status)
 		return
 	}
 
@@ -108,7 +112,7 @@ func (h *ProductHandler) Update(w http.ResponseWriter, r *http.Request) {
 	product.ID = id
 	if err := h.service.Update(&product); err != nil {
 		status := http.StatusBadRequest
-		if err == models.ErrInvalidID {
+		if err == models.ErrInvalidID || err == models.ErrCategoryNotFound {
 			status = http.StatusNotFound
 		}
 		http.Error(w, err.Error(), status)

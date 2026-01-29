@@ -6,25 +6,30 @@ import (
 )
 
 type ProductService struct {
-	repo *repositories.ProductRepository
+	productRepo  *repositories.ProductRepository
+	categoryRepo *repositories.CategoryRepository
 }
 
-func NewProductService(repo *repositories.ProductRepository) *ProductService {
-	return &ProductService{repo: repo}
+func NewProductService(productRepo *repositories.ProductRepository, categoryRepo *repositories.CategoryRepository) *ProductService {
+	return &ProductService{
+		productRepo:  productRepo,
+		categoryRepo: categoryRepo,
+	}
 }
 
-func (s *ProductService) GetAll() ([]models.Product, error) {
-	return s.repo.GetAll()
+func (s *ProductService) GetAll() ([]models.ProductList, error) {
+	return s.productRepo.GetAll()
 }
 
-func (s *ProductService) GetByID(id int) (*models.Product, error) {
+func (s *ProductService) GetByID(id int) (*models.ProductDetail, error) {
 	if id <= 0 {
 		return nil, models.ErrInvalidID
 	}
-	return s.repo.GetByID(id)
+	return s.productRepo.GetByID(id)
 }
 
 func (s *ProductService) Create(product *models.Product) error {
+	// Basic validation
 	if product.Name == "" {
 		return models.ErrNameRequired
 	}
@@ -34,7 +39,20 @@ func (s *ProductService) Create(product *models.Product) error {
 	if product.Stock < 0 {
 		return models.ErrInvalidStock
 	}
-	return s.repo.Create(product)
+	if product.CategoryID <= 0 {
+		return models.ErrInvalidCategoryID
+	}
+
+	// Validate category exists
+	categoryExists, err := s.productRepo.CheckCategoryExists(product.CategoryID)
+	if err != nil {
+		return err
+	}
+	if !categoryExists {
+		return models.ErrCategoryNotFound
+	}
+
+	return s.productRepo.Create(product)
 }
 
 func (s *ProductService) Update(product *models.Product) error {
@@ -50,12 +68,25 @@ func (s *ProductService) Update(product *models.Product) error {
 	if product.Stock < 0 {
 		return models.ErrInvalidStock
 	}
-	return s.repo.Update(product)
+	if product.CategoryID <= 0 {
+		return models.ErrInvalidCategoryID
+	}
+
+	// Validate category exists
+	categoryExists, err := s.productRepo.CheckCategoryExists(product.CategoryID)
+	if err != nil {
+		return err
+	}
+	if !categoryExists {
+		return models.ErrCategoryNotFound
+	}
+
+	return s.productRepo.Update(product)
 }
 
 func (s *ProductService) Delete(id int) error {
 	if id <= 0 {
 		return models.ErrInvalidID
 	}
-	return s.repo.Delete(id)
+	return s.productRepo.Delete(id)
 }
